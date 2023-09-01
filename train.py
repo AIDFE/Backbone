@@ -2,8 +2,10 @@ import os
 import itertools
 import glob
 import shutil
+import numpy as np
 from tools.util import AttrDict
 from torch.utils.data import DataLoader
+from tools.vis import dataset_vis
 
 import sacred
 from sacred import Experiment
@@ -41,7 +43,7 @@ def cfg():
     
 
 
-@ex.config_hook
+@ex.config_hook     # Sacred 相关
 def add_observer(config, command_name, logger):
     """A hook fucntion to add observer"""
     exp_name = f'{config["name"]}'
@@ -74,7 +76,7 @@ def main(_run, _config, _log):
 
         train_set       = ABD.get_training(modality = opt.tr_domain)
         if opt.te_domain[0] == opt.tr_domain[0]:
-            test_set        = ABD.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) # if same domain, then use the normalize op from the source
+            test_set        = ABD.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
             test_set        = ABD.get_test_all(modality = opt.te_domain, norm_func = None)
         label_name          = ABD.LABEL_NAME
@@ -87,7 +89,7 @@ def main(_run, _config, _log):
 
         train_set       = MMS.get_training(modality = opt.tr_domain)
         if opt.te_domain[0] == opt.tr_domain[0]:
-            test_set        = MMS.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) # if same domain, then use the normalize op from the source
+            test_set        = MMS.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
             test_set        = MMS.get_test_all(modality = opt.te_domain, norm_func = None)
         label_name          = MMS.LABEL_NAME
@@ -97,7 +99,14 @@ def main(_run, _config, _log):
     
 
     _log.info(f'Using TR domain {opt.tr_domain}; TE domain {opt.te_domain}')
-    
+    # dataset_vis(test_set, save_path='CT', vis_num=10)     # dataset 可视化验证：数据和标签
+
+
+
+
+
+
+
 
 
 
