@@ -2,10 +2,14 @@ import os
 import itertools
 import glob
 import shutil
+import time
 import numpy as np
-from tools.util import AttrDict
+import torch
+from tools.util import AttrDict, worker_init_fn
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
+from masks.multiblock import MaskCollator as MBMaskCollator
+from masks.utils import apply_masks, repeat_interleave_batch
 
 import sacred
 from sacred import Experiment
@@ -32,6 +36,8 @@ def cfg():
     seed = 1234
     name = "ijepa"  # exp_name
     checkpoints_dir = './checkpoints'
+    epoch_count = 1
+    batchsize = 4
     
     data_name = 'ABDOMINAL'
     tr_domain = 'MR'
@@ -100,6 +106,31 @@ def main(_run, _config, _log):
 
     _log.info(f'Using TR domain {opt.tr_domain}; TE domain {opt.te_domain}')
     # dataset_vis(test_set, save_path='CT', vis_num=10)     # dataset 可视化验证：数据和标签
+
+
+    # Mask 构建
+    mask_collator = MBMaskCollator(input_size=(192, 192))
+    train_loader = DataLoader(dataset = train_set, num_workers = 4,\
+                              batch_size = opt.batchsize, shuffle = True, 
+                              drop_last = True, worker_init_fn =  worker_init_fn, 
+                              pin_memory = True, collate_fn=mask_collator)
+    
+    for epoch in range(opt.epoch_count):
+        epoch_start_time = time.time()
+        for i, (train_batch, masks_enc, masks_pred) in enumerate(train_loader):
+            train_input = {'img': train_batch["img"],
+                            'lb': train_batch["lb"]}
+            
+
+            
+            h = torch.rand((4, 144, 2048))
+            h1 = apply_masks(h, masks_pred)
+            h2 = repeat_interleave_batch(h1, opt.batchsize, repeat=len(masks_enc))
+
+            
+            
+        
+
 
 
 

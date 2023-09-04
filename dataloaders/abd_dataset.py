@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import dataloaders.niftiio as nio
 import dataloaders.transform_utils as trans
+from torchvision import transforms
 import torch
 import os
 import platform
@@ -184,6 +185,7 @@ class AbdominalDataset(torch_data.Dataset):
     def __getitem__(self, index):
         index = index % len(self.actual_dataset)
         curr_dict = self.actual_dataset[index]
+
         if self.is_train is True:
             comp = np.concatenate( [curr_dict["img"], curr_dict["lb"]], axis = -1 )
             if self.transforms:
@@ -204,6 +206,12 @@ class AbdominalDataset(torch_data.Dataset):
         if self.tile_z_dim > 1:
             img = img.repeat( [ self.tile_z_dim, 1, 1] )
             assert img.ndimension() == 3
+
+        
+        # transform_list = [transforms.Resize((224, 224), antialias=True)]
+        # transform = transforms.Compose(transform_list)
+        # img = transform(img)
+        # lb = transform(lb)
 
         is_start    = curr_dict["is_start"]
         is_end      = curr_dict["is_end"]
