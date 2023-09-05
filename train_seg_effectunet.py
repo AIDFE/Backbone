@@ -10,7 +10,7 @@ from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
 from tools.test_dice import prediction_wrapper
-from networks.vision_transformer import SwinUnet as ViT_seg
+from networks.swin_transformer import SwinUnet as ViT_seg
 from networks.smpmodels import efficient_unet
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
@@ -49,8 +49,8 @@ def cfg():
     lr = 0.0003
     
     data_name = 'ABDOMINAL'
-    tr_domain = 'MR'
-    te_domain = 'CT'
+    tr_domain = 'CT'
+    te_domain = 'MR'
 
     # data_name = 'MMS'
     # tr_domain = ['vendorA']

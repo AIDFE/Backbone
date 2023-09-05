@@ -70,3 +70,43 @@ def dataset_vis(dataset, save_path, vis_num):
 
    
 
+#  print(masks_enc[0].shape, masks_pred[0].shape) #[B, 12, 12]
+#             print(len(masks_enc), len(masks_pred))
+
+#             re_mask_enc = F.interpolate(masks_enc[0].unsqueeze(1).float(), size=[192, 192], mode="nearest")
+#             print(re_mask_enc.shape)
+
+#             img_mask_enc = img * re_mask_enc
+#             final_image = to01(img_mask_enc)[0,0].cpu().numpy()
+#             Image.fromarray(final_image.astype(np.uint8)).save(os.path.join(save_path, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '.png'))
+
+            
+#             re_mask_p_1 = F.interpolate(masks_pred[0].unsqueeze(1).float(), size=[192, 192], mode="nearest")
+#             re_mask_p_2 = F.interpolate(masks_pred[1].unsqueeze(1).float(), size=[192, 192], mode="nearest")
+#             re_mask_p_3 = F.interpolate(masks_pred[2].unsqueeze(1).float(), size=[192, 192], mode="nearest")
+#             re_mask_p_4 = F.interpolate(masks_pred[3].unsqueeze(1).float(), size=[192, 192], mode="nearest")
+
+
+#             img_mask_p1 = img * re_mask_p_1
+#             final_image = to01(img_mask_p1)[0,0].cpu().numpy()
+#             print(final_image)
+#             Image.fromarray(final_image.astype(np.uint8)).save(os.path.join(save_path_p, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '1.png'))
+
+#             img_mask_p2 = img * re_mask_p_2
+#             final_image = to01(img_mask_p2)[0,0].cpu().numpy()
+#             Image.fromarray(final_image.astype(np.uint8)).save(os.path.join(save_path_p, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '2.png'))
+
+#             img_mask_p3 = img * re_mask_p_3
+#             final_image = to01(img_mask_p3)[0,0].cpu().numpy()
+#             Image.fromarray(final_image.astype(np.uint8)).save(os.path.join(save_path_p, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '3.png'))
+
+#             img_mask_p4 = img * re_mask_p_4
+#             final_image = to01(img_mask_p4)[0,0].cpu().numpy()
+#             Image.fromarray(final_image.astype(np.uint8)).save(os.path.join(save_path_p, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '4.png'))
+
+
+#             if i == 10:
+#                 break
+            
+
+

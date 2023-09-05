@@ -5,14 +5,19 @@ import shutil
 import time
 import numpy as np
 import torch
+from PIL import Image
 from masks.multiblock import MaskCollator as MBMaskCollator
+from masks.utils import apply_masks, repeat_interleave_batch
+
 from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
-from tools.vis import dataset_vis
+from tools.vis import dataset_vis, to01
 from tools.test_dice import prediction_wrapper
 from networks.smpmodels import efficient_unet
+from networks.vision_transformer import vit_small, vit_predictor
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
+from torch.nn import functional as F
 
 import sacred
 from sacred import Experiment
@@ -38,7 +43,7 @@ for source_file in sources_to_save:
 def cfg():
 
     seed = 1234
-    name = "effectnet-unet-seg"  # exp_name
+    name = "self-supervised-ex"  # exp_name
     checkpoints_dir = './checkpoints'
     snapshot_dir = ''
     epoch_count = 2000
@@ -146,39 +151,158 @@ def main(_run, _config, _log):
                               drop_last = True, worker_init_fn =  worker_init_fn, 
                               pin_memory = True, collate_fn=mask_collator)
     
-
+   
     model = efficient_unet(nclass = opt.num_classes, in_channel = 3)
     model.train()
+
+    encoder = vit_small().cuda()
+    encoder.train()
+    predictor = vit_predictor(
+        num_patches=encoder.patch_embed.num_patches,
+        embed_dim=encoder.embed_dim,
+        depth=6,
+        num_heads=encoder.num_heads).cuda()
+    predictor.train()
+
+    criterionDice = SoftDiceLoss(opt.num_classes).cuda()
+    optimizer_seg = optim.Adam(itertools.chain(model.parameters(), encoder.parameters(), predictor.parameters()), 
+                               lr=opt.lr, betas=(0.5, 0.999), weight_decay=0.00003)
+    tbfile_dir = os.path.join(_run.observers[0].dir, 'tboard_file'); os.mkdir(tbfile_dir)
+    writer = SummaryWriter(tbfile_dir)
+
     iter_num = 0
     max_iterations = opt.epoch_count * len(train_loader)
     best_score = 0
-   
 
-    
     for epoch in range(opt.epoch_count):
         epoch_start_time = time.time()
         for i, (train_batch, masks_enc, masks_pred) in enumerate(train_loader):
             img = train_batch['img'].cuda()
             lb = train_batch['lb'].cuda()
+            masks_enc = [u.cuda() for u in masks_enc]
+            masks_pred = [u.cuda() for u in masks_pred]
 
-            # 可视化Mask
+            def train_step(iter_num):
+                def forward_target():
+                    outputs, h = model(img)
+                    h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
+                    B = len(h)
+                    # -- create targets (masked regions of h)
+                    h = apply_masks(h, masks_pred)
+                    h = repeat_interleave_batch(h, B, repeat=len(masks_enc))
+                    return outputs, h
+                
+                def forward_context():
+                    z = encoder(img, masks_enc)
+                    print(z.shape)
+                    z = predictor(z, masks_enc, masks_pred)
+                    return z
+
+                def loss_sf(z, h):
+                    loss = F.smooth_l1_loss(z, h)
+                    return loss
+                
+                def loss_dice(outputs, lb):
+                    loss = criterionDice(outputs, lb)
+                    return loss
+                
+
+                outputs, h = forward_target()
+                z = forward_context()
+                loss_self =  loss_sf(z, h)
+                loss = loss_dice(outputs=outputs, lb=lb) + loss_self
+                optimizer_seg.zero_grad()
+                loss.backward()
+                optimizer_seg.step()
+                lr_ = opt.lr * (1.0 - iter_num / max_iterations) ** 0.9
+                for param_group in optimizer_seg.param_groups:
+                    param_group['lr'] = lr_
+
+                writer.add_scalar('info/lr', lr_, iter_num)
+                writer.add_scalar('info/total_loss', loss, iter_num)
+                writer.add_scalar('info/loss_self', loss_self, iter_num)
+
+                # _log.info('iteration %d / %d : loss : %f, loss_ce: %f' % (iter_num, max_iterations, loss.item(), loss_ce.item()))
+
+                if iter_num % 200 == 0:
+                    image = img[1, 0:1, :, :]
+                    image = (image - image.min()) / (image.max() - image.min())
+                    writer.add_image('train/Image', image, iter_num)
+                    outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
+                    writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
+                    labs = lb[1,0, ...].unsqueeze(0) * 50
+                    writer.add_image('train/GroundTruth', labs, iter_num)
+            
+            train_step(iter_num)
+            iter_num = iter_num + 1
+            
+        # test
+        if (epoch % opt.infer_epoch_freq == 0):
+            model.eval()
+            t0  = time.time()
+            print('infering the model at the end of epoch %d' % (epoch))
+            with torch.no_grad():
+                print(f'Starting inferring ... ')
+                preds, dsc_table, error_dict, domain_list = prediction_wrapper(model, test_loader, opt, epoch, label_name)
+                preds_val, dsc_table_val, error_dict_val, domain_list_val = prediction_wrapper(model, val_loader, opt, epoch, label_name)
+
+                if len(opt.te_domain) == 1:
+                    if best_score < error_dict['overall']:
+                        if best_score != 0:
+                            model_path = os.listdir(opt.snapshot_dir)[0]
+                            os.remove(os.path.join(opt.snapshot_dir, model_path))
+                        best_score = error_dict['overall']
+                        save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
+                        torch.save(model.state_dict(), save_mode_path)
+                    _run.log_scalar('meanDiceTarget', error_dict['overall'])
+                    _run.log_scalar('val_meanDiceTarget', error_dict_val['overall'])
+
+                else:
+                    if best_score < error_dict['overall_by_domain']:
+                        if best_score != 0:
+                            model_path = os.listdir(opt.snapshot_dir)[0]
+                            os.remove(os.path.join(opt.snapshot_dir, model_path))
+                        best_score = error_dict['overall_by_domain']
+                        save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
+                        torch.save(model.state_dict(), save_mode_path)
+                    _run.log_scalar('meanDiceAvgTargetDomains', error_dict['overall_by_domain'])
+                    _run.log_scalar('val_meanDiceAvgTargetDomains', error_dict_val['overall'])
+                    for _dm in domain_list_val:
+                        _run.log_scalar(f'val_meanDice_{_dm}', error_dict_val[f'domain_{_dm}_overall'])
+                    for _dm in domain_list:
+                        _run.log_scalar(f'meanDice_{_dm}', error_dict[f'domain_{_dm}_overall'])
+
+
+                t1 = time.time()
+                print("End of model inference, which takes {} seconds".format(t1 - t0))
+            model.train()
+        print('End of epoch %d / %d \t Time Taken: %d sec' % (epoch, opt.epoch_count, time.time() - epoch_start_time))
+            
+
+            
+          
+            
+        
+
+
+
+
+            
+              
+
             
 
 
+                
 
 
-            # outputs, enc_feature = model(img)
-            # enc_feature = enc_feature[-2]
-            # h = enc_feature.reshape(opt.batchsize, enc_feature.shape[1], -1).permute((0, 2, 1))  # [B, HW, D]
-            
-            
-           
-            
 
-            
-            # h = torch.rand((4, 144, 2048))
-            # h1 = apply_masks(h, masks_pred)
-            # h2 = repeat_interleave_batch(h1, opt.batchsize, repeat=len(masks_enc))
+
+
+
+
+
+
 
             
             

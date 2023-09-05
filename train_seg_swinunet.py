@@ -9,7 +9,7 @@ from tools.util import AttrDict, worker_init_fn, DiceLoss
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
 from tools.test_dice import prediction_wrapper
-from networks.vision_transformer import SwinUnet as ViT_seg
+from networks.swin_transformer import SwinUnet as ViT_seg
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
 

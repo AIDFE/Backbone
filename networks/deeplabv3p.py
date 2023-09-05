@@ -37,7 +37,7 @@ class DeepLabv3p(nn.Module):
         pred = self.classifier(v3plus_feature)
         b, c, h, w = data.shape
         pred = F.interpolate(pred, size=(h, w), mode='bilinear', align_corners=True)
-        return pred, ''
+        return pred
 
    
     def _nostride_dilate(self, m, dilate):

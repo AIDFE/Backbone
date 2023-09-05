@@ -1,19 +1,24 @@
+from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image, deprocess_image, preprocess_image
+from pytorch_grad_cam.utils.model_targets import SemanticSegmentationTarget
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+import cv2
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import itertools
 import glob
 import shutil
 import time
 import numpy as np
 import torch
+import torch.nn as nn
 from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
-from tools.vis import dataset_vis
+from tools.vis import dataset_vis, to01
 from tools.test_dice import prediction_wrapper
+from networks.swin_transformer import SwinUnet as ViT_seg
 from networks.deeplabv3p import DeepLabv3p
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
-import torch.nn as nn
 
 import sacred
 from sacred import Experiment
@@ -39,11 +44,11 @@ for source_file in sources_to_save:
 def cfg():
 
     seed = 1234
-    name = "deeplabv3-seg"  # exp_name
+    name = "grad_cam"  # exp_name
     checkpoints_dir = './checkpoints'
     snapshot_dir = ''
-    epoch_count = 2000
-    batchsize = 20
+    epoch_count = 1
+    batchsize = 1
     infer_epoch_freq = 50
     save_epoch_freq = 50
     lr = 0.0003
@@ -85,7 +90,7 @@ def main(_run, _config, _log):
 
     opt = AttrDict(_config)
 
-    # load dataset
+     # load dataset
     if opt.data_name == 'ABDOMINAL':
         import dataloaders.abd_dataset as ABD
         if not isinstance(opt.tr_domain, list):
@@ -133,96 +138,39 @@ def main(_run, _config, _log):
     test_loader = DataLoader(dataset = test_set, num_workers = 4,\
                              batch_size = 1, shuffle = False, pin_memory = True)
     
-
-    
-
     model = DeepLabv3p(opt, num_classes=opt.num_classes, norm_layer=nn.BatchNorm2d, 
                        in_channels=opt.in_channels,
                        pretrained_model='pretrain_model/resnet50_v1c.pth').cuda()
-    model.train()
+    
+    save_dict = torch.load('/home/lijiaxi/Project/MedAI/checkpoints/deeplabv3-seg/1/snapshots/best_score_76.63_1100.pth', map_location='cuda:0')
+    model.load_state_dict(save_dict, strict=False)
+    
+    # cam = GradCAM(model=model, target_layers=[model.backbone.layer4[-1] ], use_cuda=True)
+    # cam = GradCAM(model=model, target_layers=[model.head.last_conv], use_cuda=True)
+    cam = GradCAM(model=model, target_layers=[model.head.aspp.leak_relu], use_cuda=True)
 
-    criterionDice = SoftDiceLoss(opt.num_classes).cuda()
-    optimizer = optim.Adam(model.parameters(), lr=opt.lr, betas=(0.5, 0.999), weight_decay=0.00003)
-    tbfile_dir = os.path.join(_run.observers[0].dir, 'tboard_file'); os.mkdir(tbfile_dir)
-    writer = SummaryWriter(tbfile_dir)
 
-    iter_num = 0
-    max_iterations = opt.epoch_count * len(train_loader)
-    best_score = 0
-   
+    cam_save_path = 'visualization/grad_cam_1'
+    isExists=os.path.exists(cam_save_path)
+    if not isExists:
+        os.mkdir(cam_save_path) 
+
     for epoch in range(opt.epoch_count):
         epoch_start_time = time.time()
         for i, train_batch in enumerate(train_loader):
             img = train_batch['img'].cuda()
             lb = train_batch['lb'].cuda()
-            outputs, _ = model(img)
-            loss_dice = criterionDice(outputs, lb)
-            loss = loss_dice
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            lr_ = opt.lr * (1.0 - iter_num / max_iterations) ** 0.9
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_
+            targets = [SemanticSegmentationTarget(1, lb)]
+            grayscale_cam = cam(input_tensor=img, targets=targets) 
+            grayscale_cam = grayscale_cam[0,:]
+            img_float_np = np.float32(to01(img[0,0:1,...]).permute((1, 2, 0)).cpu().numpy())/255
+            cam_image = show_cam_on_image(img_float_np, grayscale_cam, use_rgb=False)
+            cv2.imwrite(os.path.join(cam_save_path, train_batch['scan_id'][0] + '_' + str(train_batch['z_id'][0].numpy()) + '.png'), cam_image)
 
-            iter_num = iter_num + 1
-            writer.add_scalar('info/lr', lr_, iter_num)
-            writer.add_scalar('info/total_loss', loss, iter_num)
-            # writer.add_scalar('info/loss_ce', loss_ce, iter_num)
+            if i == 30:
+                break
 
-            # _log.info('iteration %d / %d : loss : %f, loss_ce: %f' % (iter_num, max_iterations, loss.item(), loss_ce.item()))
-
-            if iter_num % 200 == 0:
-                image = img[1, 0:1, :, :]
-                image = (image - image.min()) / (image.max() - image.min())
-                writer.add_image('train/Image', image, iter_num)
-                outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
-                writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
-                labs = lb[1,0, ...].unsqueeze(0) * 50
-                writer.add_image('train/GroundTruth', labs, iter_num)
-            
-
-        # test
-        if (epoch % opt.infer_epoch_freq == 0):
-            model.eval()
-            t0  = time.time()
-            print('infering the model at the end of epoch %d' % (epoch))
-            with torch.no_grad():
-                print(f'Starting inferring ... ')
-                preds, dsc_table, error_dict, domain_list = prediction_wrapper(model, test_loader, opt, epoch, label_name)
-                preds_val, dsc_table_val, error_dict_val, domain_list_val = prediction_wrapper(model, val_loader, opt, epoch, label_name)
-
-                if len(opt.te_domain) == 1:
-                    if best_score < error_dict['overall']:
-                        if best_score != 0:
-                            model_path = os.listdir(opt.snapshot_dir)[0]
-                            os.remove(os.path.join(opt.snapshot_dir, model_path))
-                        best_score = error_dict['overall']
-                        save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
-                        torch.save(model.state_dict(), save_mode_path)
-                    _run.log_scalar('meanDiceTarget', error_dict['overall'])
-                    _run.log_scalar('val_meanDiceTarget', error_dict_val['overall'])
-
-                else:
-                    if best_score < error_dict['overall_by_domain']:
-                        if best_score != 0:
-                            model_path = os.listdir(opt.snapshot_dir)[0]
-                            os.remove(os.path.join(opt.snapshot_dir, model_path))
-                        best_score = error_dict['overall_by_domain']
-                        save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
-                        torch.save(model.state_dict(), save_mode_path)
-                    _run.log_scalar('meanDiceAvgTargetDomains', error_dict['overall_by_domain'])
-                    _run.log_scalar('val_meanDiceAvgTargetDomains', error_dict_val['overall'])
-                    for _dm in domain_list_val:
-                        _run.log_scalar(f'val_meanDice_{_dm}', error_dict_val[f'domain_{_dm}_overall'])
-                    for _dm in domain_list:
-                        _run.log_scalar(f'meanDice_{_dm}', error_dict[f'domain_{_dm}_overall'])
-
-                t1 = time.time()
-                print("End of model inference, which takes {} seconds".format(t1 - t0))
-            model.train()
-        print('End of epoch %d / %d \t Time Taken: %d sec' % (epoch, opt.epoch_count, time.time() - epoch_start_time))
-            
+          
 
             
           
@@ -233,10 +181,3 @@ def main(_run, _config, _log):
 
 
 
-
-
-
-
-
-
-    
