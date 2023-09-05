@@ -175,40 +175,27 @@ def set_seed(seed):
 
 
 
-class DiceLoss(nn.Module):
+class SoftDiceLoss(nn.Module):
     def __init__(self, n_classes):
-        super(DiceLoss, self).__init__()
+        super(SoftDiceLoss, self).__init__()
+        self.one_hot_encoder = One_Hot(n_classes).forward
         self.n_classes = n_classes
 
-    def _one_hot_encoder(self, input_tensor):
-        tensor_list = []
-        for i in range(self.n_classes):
-            temp_prob = input_tensor == i  # * torch.ones_like(input_tensor)
-            tensor_list.append(temp_prob.unsqueeze(1))
-        output_tensor = torch.cat(tensor_list, dim=1)
-        return output_tensor.float()
-
-    def _dice_loss(self, score, target):
-        target = target.float()
+    def forward(self, input, target):
+        """
+        input: logits : nb x nc x H x W
+        target: dense mask
+        """
         smooth = 1e-5
-        intersect = torch.sum(score * target)
-        y_sum = torch.sum(target * target)
-        z_sum = torch.sum(score * score)
-        loss = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
-        loss = 1 - loss
-        return loss
+        batch_size = input.size(0)
 
-    def forward(self, inputs, target, weight=None, softmax=False):
-        if softmax:
-            inputs = torch.softmax(inputs, dim=1)
-        target = self._one_hot_encoder(target)
-        if weight is None:
-            weight = [1] * self.n_classes
-        assert inputs.size() == target.size(), 'predict {} & target {} shape do not match'.format(inputs.size(), target.size())
-        class_wise_dice = []
-        loss = 0.0
-        for i in range(0, self.n_classes):
-            dice = self._dice_loss(inputs[:, i], target[:, i])
-            class_wise_dice.append(1.0 - dice.item())
-            loss += dice * weight[i]
-        return loss / self.n_classes
+        input = F.softmax(input, dim=1).view(batch_size, self.n_classes, -1)
+        target = self.one_hot_encoder(target).contiguous().view(batch_size, self.n_classes, -1)
+
+        inter = torch.sum(input * target, 2)# + smooth # originally there is a smooth on inter which I believe to be a bug!
+        union = torch.sum(input, 2) + torch.sum(target, 2) + smooth
+
+        score = torch.sum(2.0 * inter / union)
+        score = 1.0 - score / (float(batch_size) * float(self.n_classes))
+
+        return score

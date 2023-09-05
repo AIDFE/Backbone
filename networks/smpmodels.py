@@ -28,7 +28,7 @@ class EfficientUNet(torch.nn.Module):
         if self.return_feature or volatile_return_feature:
             return masks, self.decoder_output
         else:
-            return masks, []
+            return masks, self.enc_features
 
 def efficient_unet(nclass, in_channel, gpu_ids = [], return_feature = False, **kwargs):
     return EfficientUNet(nclass=nclass, classifier = None, return_feature = return_feature, **kwargs).cuda()

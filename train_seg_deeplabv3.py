@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import itertools
 import glob
 import shutil
@@ -10,10 +10,10 @@ from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
 from tools.test_dice import prediction_wrapper
-from networks.vision_transformer import SwinUnet as ViT_seg
-from networks.smpmodels import efficient_unet
+from networks.deeplabv3p import DeepLabv3p
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
+import torch.nn as nn
 
 import sacred
 from sacred import Experiment
@@ -39,7 +39,7 @@ for source_file in sources_to_save:
 def cfg():
 
     seed = 1234
-    name = "effectnet-unet-seg"  # exp_name
+    name = "deeplabv3-seg"  # exp_name
     checkpoints_dir = './checkpoints'
     snapshot_dir = ''
     epoch_count = 2000
@@ -85,7 +85,7 @@ def main(_run, _config, _log):
 
     opt = AttrDict(_config)
 
-     # load dataset
+    # load dataset
     if opt.data_name == 'ABDOMINAL':
         import dataloaders.abd_dataset as ABD
         if not isinstance(opt.tr_domain, list):
@@ -136,8 +136,9 @@ def main(_run, _config, _log):
 
     
 
-
-    model = efficient_unet(nclass = opt.num_classes, in_channel = 3)
+    model = DeepLabv3p(opt, num_classes=opt.num_classes, norm_layer=nn.BatchNorm2d, 
+                       in_channels=opt.in_channels,
+                       pretrained_model='pretrain_model/resnet50_v1c.pth').cuda()
     model.train()
 
     criterionDice = SoftDiceLoss(opt.num_classes).cuda()
@@ -216,7 +217,6 @@ def main(_run, _config, _log):
                         _run.log_scalar(f'val_meanDice_{_dm}', error_dict_val[f'domain_{_dm}_overall'])
                     for _dm in domain_list:
                         _run.log_scalar(f'meanDice_{_dm}', error_dict[f'domain_{_dm}_overall'])
-
 
                 t1 = time.time()
                 print("End of model inference, which takes {} seconds".format(t1 - t0))

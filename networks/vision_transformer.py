@@ -48,7 +48,7 @@ class SwinUnet(nn.Module):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
         logits = self.swin_unet(x)
-        return logits
+        return logits, ''
 
     def load_from(self, config):
         pretrained_path = config.pretrained_path

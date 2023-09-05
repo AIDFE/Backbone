@@ -5,16 +5,20 @@ import shutil
 import time
 import numpy as np
 import torch
-from tools.util import AttrDict, worker_init_fn
+from masks.multiblock import MaskCollator as MBMaskCollator
+from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
-from masks.multiblock import MaskCollator as MBMaskCollator
-from masks.utils import apply_masks, repeat_interleave_batch
+from tools.test_dice import prediction_wrapper
+from networks.smpmodels import efficient_unet
+from torch.nn.modules.loss import CrossEntropyLoss
+import torch.optim as optim
 
 import sacred
 from sacred import Experiment
 from sacred.observers import FileStorageObserver
 from sacred.utils import apply_backspaces_and_linefeeds
+from tensorboardX import SummaryWriter
 
 sacred.SETTINGS['CONFIG']['READ_ONLY_CONFIG'] = False
 sacred.SETTINGS.CAPTURE_MODE = 'no'
@@ -34,10 +38,14 @@ for source_file in sources_to_save:
 def cfg():
 
     seed = 1234
-    name = "ijepa"  # exp_name
+    name = "effectnet-unet-seg"  # exp_name
     checkpoints_dir = './checkpoints'
-    epoch_count = 1
-    batchsize = 4
+    snapshot_dir = ''
+    epoch_count = 2000
+    batchsize = 20
+    infer_epoch_freq = 50
+    save_epoch_freq = 50
+    lr = 0.0003
     
     data_name = 'ABDOMINAL'
     tr_domain = 'MR'
@@ -46,7 +54,10 @@ def cfg():
     # data_name = 'MMS'
     # tr_domain = ['vendorA']
     # te_domain = ['vendorC']
-    
+
+    num_classes = 5
+    patch_size = 16
+    in_channels = 3
 
 
 @ex.config_hook     # Sacred 相关
@@ -73,7 +84,7 @@ def main(_run, _config, _log):
 
     opt = AttrDict(_config)
 
-    # load dataset
+     # load dataset
     if opt.data_name == 'ABDOMINAL':
         import dataloaders.abd_dataset as ABD
         if not isinstance(opt.tr_domain, list):
@@ -81,6 +92,7 @@ def main(_run, _config, _log):
             opt.te_domain = [opt.te_domain]
 
         train_set       = ABD.get_training(modality = opt.tr_domain)
+        val_set         = ABD.get_validation(modality = opt.tr_domain, norm_func = train_set.normalize_op)
         if opt.te_domain[0] == opt.tr_domain[0]:
             test_set        = ABD.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
@@ -94,6 +106,7 @@ def main(_run, _config, _log):
             opt.te_domain = [opt.te_domain]
 
         train_set       = MMS.get_training(modality = opt.tr_domain)
+        val_set         = MMS.get_validation(modality = opt.tr_domain, norm_func = train_set.normalize_op)
         if opt.te_domain[0] == opt.tr_domain[0]:
             test_set        = MMS.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
@@ -107,6 +120,24 @@ def main(_run, _config, _log):
     _log.info(f'Using TR domain {opt.tr_domain}; TE domain {opt.te_domain}')
     # dataset_vis(test_set, save_path='CT', vis_num=10)     # dataset 可视化验证：数据和标签
 
+    train_loader = DataLoader(dataset = train_set, num_workers = 4,\
+                              batch_size = opt.batchsize, shuffle = True, 
+                              drop_last = True, worker_init_fn =  worker_init_fn, 
+                              pin_memory = True)
+    
+    val_loader = DataLoader(dataset = val_set, num_workers = 4,\
+                             batch_size = 1, shuffle = False, pin_memory = True)
+    
+    
+    test_loader = DataLoader(dataset = test_set, num_workers = 4,\
+                             batch_size = 1, shuffle = False, pin_memory = True)
+    
+
+
+
+    _log.info(f'Using TR domain {opt.tr_domain}; TE domain {opt.te_domain}')
+    # dataset_vis(test_set, save_path='CT', vis_num=10)     # dataset 可视化验证：数据和标签
+
 
     # Mask 构建
     mask_collator = MBMaskCollator(input_size=(192, 192))
@@ -115,24 +146,46 @@ def main(_run, _config, _log):
                               drop_last = True, worker_init_fn =  worker_init_fn, 
                               pin_memory = True, collate_fn=mask_collator)
     
+
+    model = efficient_unet(nclass = opt.num_classes, in_channel = 3)
+    model.train()
+    iter_num = 0
+    max_iterations = opt.epoch_count * len(train_loader)
+    best_score = 0
+   
+
+    
     for epoch in range(opt.epoch_count):
         epoch_start_time = time.time()
         for i, (train_batch, masks_enc, masks_pred) in enumerate(train_loader):
-            train_input = {'img': train_batch["img"],
-                            'lb': train_batch["lb"]}
+            img = train_batch['img'].cuda()
+            lb = train_batch['lb'].cuda()
+
+            # 可视化Mask
+            
+
+
+
+
+            # outputs, enc_feature = model(img)
+            # enc_feature = enc_feature[-2]
+            # h = enc_feature.reshape(opt.batchsize, enc_feature.shape[1], -1).permute((0, 2, 1))  # [B, HW, D]
+            
+            
+           
             
 
             
-            h = torch.rand((4, 144, 2048))
-            h1 = apply_masks(h, masks_pred)
-            h2 = repeat_interleave_batch(h1, opt.batchsize, repeat=len(masks_enc))
+            # h = torch.rand((4, 144, 2048))
+            # h1 = apply_masks(h, masks_pred)
+            # h2 = repeat_interleave_batch(h1, opt.batchsize, repeat=len(masks_enc))
 
             
             
         
 
 
-
+ 
 
 
 
