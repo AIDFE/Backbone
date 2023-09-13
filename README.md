@@ -1,2 +1,4 @@
-# MedAI
-v1.0
+# Backbone
+1. deeplabv3+
+2. efficientUnet
+3. Segformer
