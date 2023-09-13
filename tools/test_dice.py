@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from torch.nn import functional as F
 from tools.util import DiceScore
 
 
@@ -30,7 +31,8 @@ def prediction_wrapper(model, test_loader, opt, epoch, label_name, mode = 'base'
             assert batch['lb'].shape[0] == 1 # enforce a batchsize of 1
 
             gth = batch['lb'].cuda()
-            pred, _ = model(batch['img'].cuda())
+            pred = model(batch['img'].cuda())
+            pred = F.interpolate(pred, gth.shape[2:], mode='bilinear', align_corners=False)
             pred = torch.argmax(pred, 1)
             curr_pred[slice_idx, ...]   = pred[0, ...] # nb (1), nc, nx, ny
             curr_gth[slice_idx, ...]    = gth[0, ...]

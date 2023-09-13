@@ -93,7 +93,7 @@ def main(_run, _config, _log):
             opt.te_domain = [opt.te_domain]
 
         train_set       = ABD.get_training(modality = opt.tr_domain)
-        val_set         = ABD.get_validation(modality = opt.tr_domain, norm_func = train_set.normalize_op)
+        val_set         = ABD.get_test(modality = opt.tr_domain, norm_func = train_set.normalize_op)
         if opt.te_domain[0] == opt.tr_domain[0]:
             test_set        = ABD.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
@@ -155,7 +155,7 @@ def main(_run, _config, _log):
         for i, train_batch in enumerate(train_loader):
             img = train_batch['img'].cuda()
             lb = train_batch['lb'].cuda()
-            outputs, _ = model(img)
+            outputs = model(img)
             loss_dice = criterionDice(outputs, lb)
             loss = loss_dice
             optimizer.zero_grad()

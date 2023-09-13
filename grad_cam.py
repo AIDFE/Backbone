@@ -54,8 +54,8 @@ def cfg():
     lr = 0.0003
     
     data_name = 'ABDOMINAL'
-    tr_domain = 'CT'
-    te_domain = 'MR'
+    tr_domain = 'MR'
+    te_domain = 'CT'
 
     # data_name = 'MMS'
     # tr_domain = ['vendorA']
@@ -145,23 +145,26 @@ def main(_run, _config, _log):
     save_dict = torch.load('/home/lijiaxi/Project/MedAI/checkpoints/deeplabv3-seg/1/snapshots/best_score_76.63_1100.pth', map_location='cuda:0')
     model.load_state_dict(save_dict, strict=False)
     
-    # cam = GradCAM(model=model, target_layers=[model.backbone.layer4[-1] ], use_cuda=True)
+    cam = GradCAM(model=model, target_layers=[model.backbone.layer4[-1] ], use_cuda=True)
     # cam = GradCAM(model=model, target_layers=[model.head.last_conv], use_cuda=True)
-    cam = GradCAM(model=model, target_layers=[model.head.aspp.leak_relu], use_cuda=True)
+    # cam = GradCAM(model=model, target_layers=[model.head.aspp.leak_relu], use_cuda=True)
 
 
-    cam_save_path = 'visualization/grad_cam_1'
+    cam_save_path = 'visualization/grad_cam_deep_feature_MR_2'
     isExists=os.path.exists(cam_save_path)
     if not isExists:
         os.mkdir(cam_save_path) 
 
     for epoch in range(opt.epoch_count):
-        epoch_start_time = time.time()
         for i, train_batch in enumerate(train_loader):
             img = train_batch['img'].cuda()
             lb = train_batch['lb'].cuda()
-            targets = [SemanticSegmentationTarget(1, lb)]
+            targets = [SemanticSegmentationTarget(2, lb)]
+            epoch_start_time = time.time()
             grayscale_cam = cam(input_tensor=img, targets=targets) 
+            epoch_end_time = time.time()
+
+            print(epoch_end_time - epoch_start_time)
             grayscale_cam = grayscale_cam[0,:]
             img_float_np = np.float32(to01(img[0,0:1,...]).permute((1, 2, 0)).cpu().numpy())/255
             cam_image = show_cam_on_image(img_float_np, grayscale_cam, use_rgb=False)

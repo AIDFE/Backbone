@@ -5,13 +5,14 @@ import shutil
 import time
 import numpy as np
 import torch
-from tools.util import AttrDict, worker_init_fn, DiceLoss
+from tools.util import AttrDict, worker_init_fn, SoftDiceLoss
 from torch.utils.data import DataLoader
 from tools.vis import dataset_vis
 from tools.test_dice import prediction_wrapper
-from networks.swin_transformer import SwinUnet as ViT_seg
+from networks.segformer import SegFormer
 from torch.nn.modules.loss import CrossEntropyLoss
 import torch.optim as optim
+from torch.nn import functional as F
 
 import sacred
 from sacred import Experiment
@@ -37,31 +38,31 @@ for source_file in sources_to_save:
 def cfg():
 
     seed = 1234
-    name = "swin-unet-seg"  # exp_name
+    name = "segformer"  # exp_name
     checkpoints_dir = './checkpoints'
     snapshot_dir = ''
     epoch_count = 2000
     batchsize = 24
     infer_epoch_freq = 50
     save_epoch_freq = 50
-    lr = 0.01
+    lr = 0.05
     
     data_name = 'ABDOMINAL'
-    tr_domain = 'MR'
-    te_domain = 'CT'
+    tr_domain = 'CT'
+    te_domain = 'MR'
 
     # data_name = 'MMS'
     # tr_domain = ['vendorA']
     # te_domain = ['vendorC']
 
-    img_size = 224
+    img_size = 192
     num_classes = 5
     patch_size = 4
     in_channels = 3
     embed_dim = 96
     depths = [2, 2, 6, 2]
     num_heads = [3, 6, 12, 24]
-    window_sizes = 7
+    window_sizes = 6
     mlp_ratio = 4
     qkv_bias = True
     qk_scale = None
@@ -70,7 +71,7 @@ def cfg():
     ape = False
     patch_norm = True
     use_checkpoint = False
-    pretrained_path = 'pretrain_model/swin_tiny_patch4_window7_224.pth'
+    # pretrained_path = 'pretrain_model/swin_tiny_patch4_window7_224.pth'
 
 
 
@@ -107,6 +108,7 @@ def main(_run, _config, _log):
             opt.te_domain = [opt.te_domain]
 
         train_set       = ABD.get_training(modality = opt.tr_domain)
+        val_set         = ABD.get_test(modality = opt.tr_domain, norm_func = train_set.normalize_op)
         if opt.te_domain[0] == opt.tr_domain[0]:
             test_set        = ABD.get_test(modality = opt.te_domain, norm_func = train_set.normalize_op) 
         else:
@@ -138,17 +140,20 @@ def main(_run, _config, _log):
                               drop_last = True, worker_init_fn =  worker_init_fn, 
                               pin_memory = True)
     
+    val_loader = DataLoader(dataset = val_set, num_workers = 4,\
+                             batch_size = 1, shuffle = False, pin_memory = True)
+    
+
+    
     test_loader = DataLoader(dataset = test_set, num_workers = 4,\
                              batch_size = 1, shuffle = False, pin_memory = True)
     
 
 
-    model = ViT_seg(opt, img_size=opt.img_size, num_classes=opt.num_classes).cuda()
-    model.load_from(opt)
+    model = SegFormer(model_name='B1', num_classes=5, image_size=224).cuda()
     model.train()
 
-    ce_loss = CrossEntropyLoss()
-    dice_loss = DiceLoss(opt.num_classes)
+    criterionDice = SoftDiceLoss(opt.num_classes).cuda()
     optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.9, weight_decay=0.0001)
     tbfile_dir = os.path.join(_run.observers[0].dir, 'tboard_file'); os.mkdir(tbfile_dir)
     writer = SummaryWriter(tbfile_dir)
@@ -161,11 +166,11 @@ def main(_run, _config, _log):
         epoch_start_time = time.time()
         for i, train_batch in enumerate(train_loader):
             img = train_batch['img'].cuda()
-            lb = train_batch['lb'].squeeze().cuda()
+            lb = train_batch['lb'].cuda()
             outputs = model(img)
-            loss_ce = ce_loss(outputs, lb.long())
-            loss_dice = dice_loss(outputs, lb, softmax=True)
-            loss = 0.4 * loss_ce + 0.6 * loss_dice
+            outputs = F.interpolate(outputs, lb.shape[2:], mode='bilinear', align_corners=False)
+            loss_dice = criterionDice(outputs, lb)
+            loss = loss_dice
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -176,7 +181,7 @@ def main(_run, _config, _log):
             iter_num = iter_num + 1
             writer.add_scalar('info/lr', lr_, iter_num)
             writer.add_scalar('info/total_loss', loss, iter_num)
-            writer.add_scalar('info/loss_ce', loss_ce, iter_num)
+            # writer.add_scalar('info/loss_ce', loss_ce, iter_num)
 
             # _log.info('iteration %d / %d : loss : %f, loss_ce: %f' % (iter_num, max_iterations, loss.item(), loss_ce.item()))
 
@@ -186,11 +191,11 @@ def main(_run, _config, _log):
                 writer.add_image('train/Image', image, iter_num)
                 outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
                 writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
-                labs = lb[1, ...].unsqueeze(0) * 50
+                labs = lb[1,0, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
             
 
-        # test
+       # test
         if (epoch % opt.infer_epoch_freq == 0):
             model.eval()
             t0  = time.time()
@@ -198,26 +203,34 @@ def main(_run, _config, _log):
             with torch.no_grad():
                 print(f'Starting inferring ... ')
                 preds, dsc_table, error_dict, domain_list = prediction_wrapper(model, test_loader, opt, epoch, label_name)
+                preds_val, dsc_table_val, error_dict_val, domain_list_val = prediction_wrapper(model, val_loader, opt, epoch, label_name)
+
                 if len(opt.te_domain) == 1:
                     if best_score < error_dict['overall']:
                         if best_score != 0:
                             model_path = os.listdir(opt.snapshot_dir)[0]
                             os.remove(os.path.join(opt.snapshot_dir, model_path))
-                        _run.log_scalar('meanDiceTarget', error_dict['overall'] )
                         best_score = error_dict['overall']
                         save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
                         torch.save(model.state_dict(), save_mode_path)
+                    _run.log_scalar('meanDiceTarget', error_dict['overall'])
+                    _run.log_scalar('val_meanDiceTarget', error_dict_val['overall'])
+
                 else:
                     if best_score < error_dict['overall_by_domain']:
                         if best_score != 0:
                             model_path = os.listdir(opt.snapshot_dir)[0]
                             os.remove(os.path.join(opt.snapshot_dir, model_path))
-                        _run.log_scalar('meanDiceAvgTargetDomains', error_dict['overall_by_domain'])
-                        for _dm in domain_list:
-                            _run.log_scalar(f'meanDice_{_dm}', error_dict[f'domain_{_dm}_overall'])
                         best_score = error_dict['overall_by_domain']
                         save_mode_path = os.path.join(opt.snapshot_dir, f'best_score_{best_score*100:.2f}_{epoch}' + '.pth')
                         torch.save(model.state_dict(), save_mode_path)
+                    _run.log_scalar('meanDiceAvgTargetDomains', error_dict['overall_by_domain'])
+                    _run.log_scalar('val_meanDiceAvgTargetDomains', error_dict_val['overall'])
+                    for _dm in domain_list_val:
+                        _run.log_scalar(f'val_meanDice_{_dm}', error_dict_val[f'domain_{_dm}_overall'])
+                    for _dm in domain_list:
+                        _run.log_scalar(f'meanDice_{_dm}', error_dict[f'domain_{_dm}_overall'])
+
 
                 t1 = time.time()
                 print("End of model inference, which takes {} seconds".format(t1 - t0))
@@ -226,15 +239,6 @@ def main(_run, _config, _log):
             
 
             
-          
-            
-        
-
-
-
-
-
-
 
 
 

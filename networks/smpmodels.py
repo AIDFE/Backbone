@@ -20,14 +20,9 @@ class EfficientUNet(torch.nn.Module):
                 activation = None
                 )
         self.return_feature = return_feature
-        self.norm = nn.LayerNorm(120)
-        self.proj = nn.Linear(120, 384, bias=True)
 
     def forward(self, x, volatile_return_feature = False):
         self.enc_features = self.model.encoder(x)
-        h = self.enc_features[-2]
-        h = h.reshape(h.shape[0], h.shape[1], -1).permute((0, 2, 1))  # [B, HW, D]
-        self.h = self.proj(h)
         self.decoder_output = self.model.decoder(*self.enc_features)
 
         masks = self.model.segmentation_head(self.decoder_output)

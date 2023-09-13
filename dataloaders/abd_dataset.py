@@ -208,10 +208,10 @@ class AbdominalDataset(torch_data.Dataset):
             assert img.ndimension() == 3
 
         
-        # transform_list = [transforms.Resize((224, 224), antialias=True)]
-        # transform = transforms.Compose(transform_list)
-        # img = transform(img)
-        # lb = transform(lb)
+        transform_list = [transforms.Resize((224, 224), antialias=True)]
+        transform = transforms.Compose(transform_list)
+        img = transform(img)
+        lb = transform(lb)
 
         is_start    = curr_dict["is_start"]
         is_end      = curr_dict["is_end"]
